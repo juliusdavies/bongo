@@ -1,0 +1,220 @@
+<!--
+    $ ant -p
+    Buildfile: build.xml
+
+    Main targets:
+
+    clean     Deletes class files and other generated files.
+    jar       Jars compiled java class files.
+    javac     Compiles java source code.
+    javadocs  Generates javadocs.
+
+    Default target: jar
+-->
+<project name="nanotime" default="jar" basedir=".">
+
+  <property name="httpclient-jar" value="commons-httpclient-3.0.jar"/>
+  <property name="log4j-jar" value="log4j-1.2.13.jar"/>
+  <property name="junit-jar" value="junit-3.8.1.jar"/>
+
+  <property name="src" location="./src/java"/>
+  <property name="build" location="./build"/>
+  <property name="lib" location="./lib"/>
+  <property name="classes" value="${build}/classes"/>
+  <property name="jar-file" value="${ant.project.name}.jar"/>
+  <property name="javadocs" value="${build}/javadocs"/>
+  <property name="rmic.includes" value="**/*RMI.class"/>
+    
+  <!--
+       Solaris and linux includes are both included here.
+       Only one of them will actually resolve at compile time.
+  -->
+  <property name="gcc.includes" value=" -I${java.home}/include -I${java.home}/../include -I${java.home}/include/linux -I${java.home}/../include/linux -I${java.home}/include/solaris -I${java.home}/../include/solaris "/>
+  <property name="gcc.wincludes" value=" -I${java.home}\include -I${java.home}\..\include -I${java.home}\include\win32 -I${java.home}\..\include\win32 "/> 
+
+  <property name="test-src" location="./src/test"/>
+  <property name="test-classes" value="${build}/test-classes"/>
+  <property name="test-jar-file" value="${ant.project.name}-tests.jar"/>
+  <property name="test.report.dir" value="${build}/test-report"/>   
+
+  <path id="compile-classpath">
+    <pathelement location="${classes}"/>
+    <pathelement location="${test-classes}"/>            
+    <pathelement location="${lib}/${httpclient-jar}"/>
+    <pathelement location="${lib}/${log4j-jar}"/>
+    <pathelement location="${lib}/${junit-jar}"/>
+  </path>
+
+  <target name="test-jar" depends="jar">
+    <mkdir dir="${test-classes}"/>
+    <javac
+      includeAntRuntime="false"
+      destdir="${test-classes}"
+      debug="true"
+      optimize="false"
+      srcdir="${test-src}"
+    >
+      <classpath refid="compile-classpath"/>
+    </javac>
+    <copy todir="${test-classes}">
+      <fileset dir="${test-src}" excludes="**/*.java"/>
+    </copy>
+    <jar
+      basedir="${test-classes}"
+      destfile="${build}/${test-jar-file}"
+      index="true"
+      whenempty="create"
+    />      
+  </target>
+
+  <target name="test" depends="test-jar">
+      <mkdir dir="${test.report.dir}"/>
+      <junit printsummary="on" haltonfailure="false" errorProperty="junit.failed"
+        failureProperty="junit.failed" fork="on" forkMode="perBatch"
+        timeout="600000" showoutput="on">
+        <syspropertyset><propertyref builtin="commandline"/></syspropertyset>
+        <formatter type="xml"/>
+        <classpath refid="compile-classpath"/>
+        <batchtest todir="${test.report.dir}">
+          <fileset dir="${test-src}" includes="**/Test*.java"/>
+        </batchtest>
+      </junit>
+      <junitreport todir="${test.report.dir}">
+        <fileset dir="${test.report.dir}">
+          <include name="TEST-*.xml"/>
+        </fileset>
+        <report todir="${test.report.dir}"/>
+      </junitreport>
+      <fail message="JUnit tests failed." if="test.failed"/>
+  </target>
+
+  <target name="init">
+    <tstamp>
+      <format property="date" pattern="zzz:yyyy-MM-dd/HH:mm:ss" locale="en"/>
+    </tstamp>
+    <condition property="isSolaris">
+      <os name="SunOS"/>
+    </condition>
+    <condition property="isWindows">
+      <os family="windows"/>
+    </condition>
+    <condition property="isMac">
+      <os family="mac"/>
+    </condition>
+    <condition property="isUnix">
+      <os family="unix"/>
+    </condition>
+    <mkdir dir="${build}"/>
+  </target>
+
+  <target name="javac" depends="init" description="Compiles java source code.">
+    <mkdir dir="${classes}"/>
+    <javac
+      includeAntRuntime="false"
+      destdir="${classes}"
+      debug="true"
+      optimize="false"
+      srcdir="${src}"
+    >
+      <classpath refid="compile-classpath"/>
+    </javac>
+    <copy todir="${classes}">
+      <fileset dir="${src}" excludes="**/*.java"/>
+    </copy>
+    <!--
+         Copy a pre-built windows dll into the jar.  The "gcc-windows" step
+         will overwrite this file, but this way we can make sure that the
+         nanotime.jar will always run on windows, even when built on unix.
+         (Those poor windows users often don't have gcc!)
+    -->
+    <copy todir="${classes}/ca/juliusdavies/nanotime">
+        <fileset dir="${basedir}/prebuilt" includes="**/*.so **/*.dll"/>
+    </copy>
+  </target>
+
+  <target name="javah" depends="javac">
+    <javah destdir="src/native" force="yes" classpathref="compile-classpath">
+      <class name="ca.juliusdavies.nanotime.Clock"/>
+    </javah>
+  </target>
+
+  <target name="gcc-windows" if="isWindows">
+    <exec executable="gcc" dir="src/native">
+      <arg line=" -mno-cygwin  ${gcc.wincludes} -Wl,--add-stdcall-alias -shared -o ..\..\build\jnt.dll win_nano.c"/>
+    </exec>
+    <copy file="build/jnt.dll" todir="${classes}/ca/juliusdavies/nanotime" overwrite="true"/>
+  </target>
+
+  <target name="set-for-solaris" if="isSolaris">
+      <property name="solaris.gcc.options" value=" -mimpure-text "/>
+  </target>
+
+  <target name="gcc-unix" unless="isMac" if="isUnix" depends="set-for-solaris">
+    <property name="solaris.gcc.options" value=""/>
+    <exec executable="gcc" dir="src/native">
+      <arg line=" ${solaris.gcc.options} -fPIC -lrt -Wall ${gcc.includes} -shared -o ../../build/libjnt.so unix_nano.c"/>
+    </exec>
+    <copy file="build/libjnt.so" todir="${classes}/ca/juliusdavies/nanotime"/>
+  </target>
+
+  <target name="gcc-mac" if="isMac">
+    <exec executable="gcc" dir="src/native">
+      <arg line=" -dynamiclib -fPIC ${gcc.includes} -Wall -shared -o ../../build/libjnt.so mac_nano.c"/>
+    </exec>
+    <copy file="build/libjnt.so" todir="${classes}/ca/juliusdavies/nanotime"/>
+  </target>
+
+  <target name="rmic" depends="javac" description="Rmics java class files named &quot;*RMI.class&quot;.">                   
+    <rmic
+      base="${classes}"
+      includes="${rmic.includes}"
+      classpathref="compile-classpath"
+    />
+  </target>
+
+  <target name="jar-no-deps">
+      <jar
+        basedir="${classes}"
+        destfile="${build}/${jar-file}"
+        index="true"
+        duplicate="fail"
+      >
+        <manifest>
+          <attribute name="Built-By" value="Julius Davies"/>
+          <attribute name="Created-By" value="Julius Davies"/>
+          <attribute name="Main-Class" value="ca.juliusdavies.nanotime.Clock"/>
+        </manifest>
+       </jar>      
+  </target>
+
+  <target name="jar" depends="rmic, javah, gcc-unix, gcc-windows, gcc-mac, jar-no-deps" description="Jars compiled java class files.">
+  </target>
+
+  <!-- Alias for "javadocs". -->
+  <target name="javadoc" depends="javadocs"/>
+
+  <target name="javadocs" depends="init" description="Generates javadocs.">
+    <mkdir dir="${javadocs}"/>
+      <javadoc
+        sourcepath="${src}"
+        destdir="${javadocs}"
+        packagenames="*"
+        classpathref="compile-classpath"
+        access="private"
+        source="yes"
+        linksource="yes"
+      >
+        <link href="http://java.sun.com/j2se/1.5.0/docs/api/"/>
+        <link href="http://java.sun.com/j2ee/1.4/docs/api/"/>
+        <link href="http://jakarta.apache.org/commons/httpclient/apidocs/"/>
+      </javadoc>
+  </target>
+
+  <target name="clean" description="Deletes class files and other generated files.">
+    <delete dir="${build}"/>
+  </target>
+
+  <target name="all" depends="clean,jar"/>
+
+
+</project>
